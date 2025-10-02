@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>최단 거리 구하기 🗺️ | 지리 학습 도우미</title>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+
+    <style>
+        /* 2. 사용자 정의 CSS (애니메이션 및 귀여운 디자인 컨셉) */
+        body {
+            font-family: 'Arial', sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f0f8ff; /* 연한 하늘색 배경 */
+            color: #333;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        #app-container {
+            width: 100%;
+            max-width: 1000px;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        h1 {
+            color: #4682b4; /* 스틸 블루 */
+            text-align: center;
+            margin-bottom: 10px;
+            animation: fadeInDown 1s ease-out;
+        }
+
+        #guide-message {
+            text-align: center;
+            margin-bottom: 15px;
+            padding: 10px;
+            background-color: #fffacd; /* 레몬 쉬폰 */
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            font-weight: bold;
+            color: #8b4513; /* 새들 브라운 */
+            animation: fadeInUp 1s ease-out 0.5s;
+            animation-fill-mode: both;
+        }
+
+        #map {
+            height: 500px;
+            width: 100%;
+            border-radius: 15px;
+            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
+            margin-bottom: 20px;
+            transition: border 0.3s;
+        }
+
+        #map:hover {
+            border: 4px solid #90ee90; /* 연한 녹색 하이라이트 */
+        }
+
+        #controls {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 10px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        #reset-btn {
+            background-color: #ff6347; /* 토마토 레드 */
+            color: white;
+        }
+
+        #reset-btn:hover {
+            background-color: #e55337;
+            transform: translateY(-2px);
+        }
+
+        #result-panel {
+            background-color: #ffffff;
+            padding: 20px;
+            border-radius: 15px;
+            box-shadow: 0 6px 10px rgba(0, 0, 0, 0.15);
+            text-align: center;
+            min-height: 80px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            transition: all 0.5s ease;
+            transform: scale(0.9); /* 초기 상태 숨김 */
+            opacity: 0;
+        }
+
+        #result-panel.show {
+            transform: scale(1);
+            opacity: 1;
+        }
+
+        .result-item {
+            margin: 5px 0;
+            font-size: 1.1em;
+            font-weight: bold;
+        }
+
+        .result-item span {
+            color: #3cb371; /* 미디움 씨 그린 */
+            font-size: 1.2em;
+            margin-left: 5px;
+        }
+
+        /* 애니메이션 키프레임 */
+        @keyframes fadeInDown {
+            from { opacity: 0; transform: translateY(-20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body>
+
+    <div id="app-container">
+        <h1>최단 거리 구하기 🧭</h1>
+        <div id="guide-message">
+            <span id="current-step">1단계: 지도 위 원하는 곳을 **출발 지점**으로 클릭하세요.</span>
+        </div>
+        
+        <div id="map"></div>
+
+        <div id="controls">
+            <button id="reset-btn" class="btn">📍 지점 초기화</button>
+        </div>
+
+        <div id="result-panel">
+            경로를 계산하는 중입니다...
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+    <script>
+        // 4. JavaScript 기능 구현
+
+        // 상수 및 변수 정의
+        const MAP_CENTER = [36.5, 127.8]; // 대한민국 중심 근처
+        const ZOOM_LEVEL = 7;
+        const OSRM_API_URL = 'http://router.project-osrm.org/route/v1/driving/';
+        
+        let startPoint = null;
+        let endPoint = null;
+        let startMarker = null;
+        let endMarker = null;
+        let routeLayer = null;
+
+        const guideMessage = document.getElementById('guide-message');
+        const currentStep = document.getElementById('current-step');
+        const resultPanel = document.getElementById('result-panel');
+        const resetButton = document.getElementById('reset-btn');
+
+        // Leaflet 맵 초기화
+        const map = L.map('map').setView(MAP_CENTER, ZOOM_LEVEL);
+
+        // OpenStreetMap 타일 레이어 추가
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '© OpenStreetMap 기여자들',
+        }).addTo(map);
+
+        // 아이콘 설정 (귀여운 애니메이션 컨셉)
+        const StartIcon = L.divIcon({
+            className: 'start-marker-icon',
+            html: '<div style="background-color: #90ee90; border-radius: 50%; width: 20px; height: 20px; border: 4px solid #3cb371; transform: scale(1); animation: pulse 1.5s infinite;"></div>',
+            iconSize: [28, 28],
+            iconAnchor: [14, 14]
+        });
+
+        const EndIcon = L.divIcon({
+            className: 'end-marker-icon',
+            html: '<div style="background-color: #add8e6; border-radius: 50%; width: 20px; height: 20px; border: 4px solid #4682b4; transform: scale(1); animation: bounce 1s infinite alternate;"></div>',
+            iconSize: [28, 28],
+            iconAnchor: [14, 14]
+        });
+
+        // 애니메이션 CSS를 동적으로 추가
+        const style = document.createElement('style');
+        style.innerHTML = `
+            @keyframes pulse {
+                0% { box-shadow: 0 0 0 0 rgba(60, 179, 113, 0.7); }
+                70% { box-shadow: 0 0 0 10px rgba(60, 179, 113, 0); }
+                100% { box-shadow: 0 0 0 0 rgba(60, 179, 113, 0); }
+            }
+            @keyframes bounce {
+                from { transform: translateY(0) scale(1); }
+                to { transform: translateY(-5px) scale(1.1); }
+            }
+        `;
+        document.head.appendChild(style);
+
+
+        // 맵 클릭 이벤트 핸들러
+        map.on('click', function(e) {
+            const lat = e.latlng.lat.toFixed(6);
+            const lng = e.latlng.lng.toFixed(6);
+            
+            if (!startPoint) {
+                // 1. 출발 지점 설정
+                startPoint = [lat, lng];
+                startMarker = L.marker(startPoint, { icon: StartIcon }).addTo(map)
+                    .bindPopup("**출발 지점**").openPopup();
+                currentStep.innerHTML = '2단계: 지도 위 원하는 곳을 **도착 지점**으로 클릭하세요.';
+            } else if (!endPoint) {
+                // 2. 도착 지점 설정
+                endPoint = [lat, lng];
+                endMarker = L.marker(endPoint, { icon: EndIcon }).addTo(map)
+                    .bindPopup("**도착 지점**").openPopup();
+                currentStep.innerHTML = '3단계: **최단 경로**를 계산합니다! 잠시만 기다려주세요.';
+                // 경로 계산 시작
+                calculateRoute();
+            } else {
+                // 3. 이미 설정된 경우: 초기화 후 다시 시작
+                resetMap();
+                // 첫 번째 클릭으로 간주하고 출발 지점 설정
+                startPoint = [lat, lng];
+                startMarker = L.marker(startPoint, { icon: StartIcon }).addTo(map)
+                    .bindPopup("**출발 지점**").openPopup();
+                currentStep.innerHTML = '2단계: 지도 위 원하는 곳을 **도착 지점**으로 클릭하세요.';
+            }
+        });
+
+        // OSRM을 사용하여 경로 계산
+        function calculateRoute() {
+            resultPanel.innerHTML = '<span style="color: #4682b4;">✨ 최단 경로를 계산하는 중...</span>';
+            resultPanel.classList.remove('show');
+            
+            const startCoords = `${startPoint[1]},${startPoint[0]}`; // OSRM은 Long, Lat 순서
+            const endCoords = `${endPoint[1]},${endPoint[0]}`; // OSRM은 Long, Lat 순서
+            
+            const url = `${OSRM_API_URL}driving/${startCoords};${endCoords}?geometries=geojson&overview=full`;
+
+            fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.code === 'Ok' && data.routes && data.routes.length > 0) {
+                        const route = data.routes[0];
+                        const distance = (route.distance / 1000).toFixed(1); // 미터 -> 킬로미터
+                        const duration = formatTime(route.duration); // 초 -> 시간/분
+                        const coordinates = route.geometry.coordinates;
+                        
+                        // OSRM 결과 (Long, Lat)를 Leaflet (Lat, Long)으로 변환
+                        const latlngs = coordinates.map(coord => [coord[1], coord[0]]);
+
+                        // 기존 경로 제거 후 새로운 경로 추가
+                        if (routeLayer) {
+                            map.removeLayer(routeLayer);
+                        }
+                        routeLayer = L.polyline(latlngs, {
+                            color: '#ff6347', // 토마토 레드 (경로 색상)
+                            weight: 6,
+                            opacity: 0.8
+                        }).addTo(map);
+
+                        // 지도 시야를 경로에 맞춤
+                        map.fitBounds(routeLayer.getBounds());
+
+                        // 결과 표시
+                        displayResult(distance, duration);
+                        currentStep.innerHTML = '✅ 경로 계산 완료! 아래 결과를 확인하세요.';
+
+                    } else {
+                        displayError('경로를 찾을 수 없거나 OSRM 서버에 문제가 발생했습니다.');
+                        console.error('OSRM API Error:', data);
+                    }
+                })
+                .catch(error => {
+                    displayError('데이터를 가져오는 중 오류가 발생했습니다.');
+                    console.error('Fetch Error:', error);
+                });
+        }
+
+        // 시간 포맷팅 함수 (초 -> 분/시간)
+        function formatTime(seconds) {
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            
+            let timeString = "";
+            if (hours > 0) {
+                timeString += `${hours}시간 `;
+            }
+            if (minutes > 0 || hours === 0) {
+                timeString += `${minutes}분`;
+            }
+            return timeString.trim();
+        }
+
+        // 결과 패널에 표시
+        function displayResult(distance, duration) {
+            resultPanel.innerHTML = `
+                <div class="result-item">총 거리: <span>${distance} km</span></div>
+                <div class="result-item">예상 소요 시간: <span>${duration}</span></div>
+                <div style="font-size: 0.8em; color: #888; margin-top: 10px;">(운전 기준 OSRM 공개 서버 결과)</div>
+            `;
+            resultPanel.classList.add('show');
+        }
+
+        // 오류 표시
+        function displayError(message) {
+            resultPanel.innerHTML = `<div style="color: #ff6347; font-weight: bold;">⚠️ 오류 발생: ${message}</div>`;
+            resultPanel.classList.add('show');
+        }
+
+        // 맵 초기화 함수
+        function resetMap() {
+            startPoint = null;
+            endPoint = null;
+            
+            if (startMarker) {
+                map.removeLayer(startMarker);
+                startMarker = null;
+            }
+            if (endMarker) {
+                map.removeLayer(endMarker);
+                endMarker = null;
+            }
+            if (routeLayer) {
+                map.removeLayer(routeLayer);
+                routeLayer = null;
+            }
+
+            resultPanel.innerHTML = '경로를 계산할 지점을 클릭해주세요.';
+            resultPanel.classList.remove('show');
+            currentStep.innerHTML = '1단계: 지도 위 원하는 곳을 **출발 지점**으로 클릭하세요.';
+        }
+
+        // 초기화 버튼 이벤트 연결
+        resetButton.addEventListener('click', resetMap);
+
+        // 초기 메시지 설정
+        resultPanel.innerHTML = '경로를 계산할 지점을 클릭해주세요.';
+        
+    </script>
+</body>
+</html>
